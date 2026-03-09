@@ -1,59 +1,108 @@
-import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
-import { useEffect } from 'react';
-import 'react-native-reanimated';
+import { Stack, useRouter, useSegments } from "expo-router";
+import * as SplashScreen from "expo-splash-screen";
+import { StatusBar } from "expo-status-bar";
+import { useEffect } from "react";
+import "../global.css";
+import { ErrorBoundary } from "../src/components/ErrorBoundary";
+import { AuthProvider, useAuth } from "../src/context/AuthContext";
+import { useAppHydration } from "../src/hooks/useAppHydration";
+import { selectHasCompletedProfileSetup, useAppStore } from "../src/stores/appStore";
 
-import { useColorScheme } from '@/components/useColorScheme';
-
-export {
-  // Catch any errors thrown by the Layout component.
-  ErrorBoundary,
-} from 'expo-router';
-
-export const unstable_settings = {
-  // Ensure that reloading on `/modal` keeps a back button present.
-  initialRouteName: '(tabs)',
-};
-
-// Prevent the splash screen from auto-hiding before asset loading is complete.
+// Keep splash screen visible while we load resources
 SplashScreen.preventAutoHideAsync();
 
-export default function RootLayout() {
-  const [loaded, error] = useFonts({
-    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
-    ...FontAwesome.font,
-  });
-
-  // Expo Router uses Error Boundaries to catch errors in the navigation tree.
-  useEffect(() => {
-    if (error) throw error;
-  }, [error]);
+function ProtectedRouteGuard() {
+  const { user, loading } = useAuth();
+  const segments = useSegments();
+  const router = useRouter();
+  const hasCompletedProfileSetup = useAppStore(selectHasCompletedProfileSetup);
 
   useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync();
+    if (loading) return;
+
+    const inAuthGroup = segments[0] === "(auth)";
+    const onProfileSetup = segments[1] === "profile-setup";
+
+    if (!user && !inAuthGroup) {
+      // Not signed in → redirect to onboarding
+      router.replace("/(auth)/onboarding");
+    } else if (user && inAuthGroup && !onProfileSetup) {
+      if (!hasCompletedProfileSetup) {
+        // Signed in but hasn't set up profile → go to profile setup
+        // Also persist onboarding goals to Supabase now that we have a user
+        const goals = useAppStore.getState().goals;
+        if (goals.length > 0) {
+          useAppStore.getState().saveGoals(user.id, goals);
+        }
+        router.replace("/(auth)/profile-setup");
+      } else {
+        // Signed in + profile complete → go home
+        router.replace("/(tabs)");
+      }
     }
-  }, [loaded]);
+  }, [user, loading, segments]);
 
-  if (!loaded) {
-    return null;
-  }
-
-  return <RootLayoutNav />;
+  return null;
 }
 
-function RootLayoutNav() {
-  const colorScheme = useColorScheme();
+/** Syncs Zustand store with Supabase when auth state changes */
+function AppHydrator() {
+  useAppHydration();
+  return null;
+}
+
+export default function RootLayout() {
+  useEffect(() => {
+    SplashScreen.hideAsync();
+  }, []);
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-      </Stack>
-    </ThemeProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <AppHydrator />
+        <ProtectedRouteGuard />
+        <StatusBar style="light" />
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: "#1B2250" },
+            animation: "fade",
+          }}
+        >
+          <Stack.Screen name="(auth)" />
+          <Stack.Screen name="(tabs)" />
+          <Stack.Screen
+            name="quiz/[category]"
+            options={{ animation: "slide_from_right" }}
+          />
+          <Stack.Screen
+            name="quiz/analysis"
+            options={{ animation: "slide_from_right" }}
+          />
+          <Stack.Screen
+            name="chat"
+            options={{
+              presentation: "modal",
+              animation: "slide_from_bottom",
+            }}
+          />
+          <Stack.Screen
+            name="blog/index"
+            options={{ animation: "slide_from_right" }}
+          />
+          <Stack.Screen
+            name="blog/[id]"
+            options={{ animation: "slide_from_right" }}
+          />
+          <Stack.Screen
+            name="sos"
+            options={{
+              presentation: "modal",
+              animation: "slide_from_bottom",
+            }}
+          />
+        </Stack>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
